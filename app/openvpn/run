@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -e -u -o pipefail
+
+waitSec=30
+DEBUG=${DEBUG:-0}
+LOGIN=${LOGIN:-"-**None**"}
+PASS=${PASS:-"-**None**"}
+[[ ${DEBUG:-0} -eq 1 ]] && set -x
+. /etc/service/date.sh --source-only
+
+##Functions
+setTimeZone() {
+  if [[ -n ${TZ} ]]; then
+    log "INFO: Setting timezone to ${TZ}"
+    cp /usr/share/zoneinfo/${TZ} /etc/localtime
+    echo ${TZ} >/etc/timezone
+  fi
+}
+
+mkTun() {
+  # Create a tun device see: https://www.kernel.org/doc/Documentation/networking/tuntap.txt
+  if [ ! -c /dev/net/tun ]; then
+    log "INFO: OVPN: Creating tun interface /dev/net/tun"
+    mkdir -p /dev/net
+    mknod /dev/net/tun c 10 200
+    chmod 600 /dev/net/tun
+  fi
+}
+
+configure_ovpn() {
+  SOURCE_DIR=/config/openvpn
+  DEST_DIR=/etc/openvpn
+  nbFiles=$(grep -c ovpn ${SOURCE_DIR}/*.ovpn || echo "0")
+  origConf=$(find ${SOURCE_DIR}/ -type f -iname "*.ovpn" | head -1)
+  confName=$(basename ${origConf})
+  destConf=${DEST_DIR}/${confName}
+  if [[ 0 -eq ${nbFiles}  ]]; then
+    log "ERROR: OVPN: No OpenVPN config found in ${SOURCE_DIR}. Exiting."
+    exit 1
+  fi
+  log "########################################################"
+  log "INFO: OVPN: Files found: $nbFiles"
+  log "INFO: OVPN: ${origConf} copied to ${destConf}"
+  log "########################################################"
+  cp -f ${origConf} ${destConf}
+
+  ## Update ping options to exit the container, so Docker will restart it
+  sed -i "s/^ping.*//g" ${destConf}
+  # Add new ones
+  sed -i 's/inactive .*/inactive 3600/' ${destConf} || echo "inactive 3600" >>${destConf}
+  echo "ping 10" >>${destConf}
+  echo "ping-exit 60" >>${destConf}
+  echo -e "script-security 2\nup /etc/service/openvpn/up.sh\ndown /etc/service/openvpn/down.sh" >>${destConf}
+  echo -e "management localhost 7505\n" >>${destConf}
+
+  # add OpenVPN user/pass
+  if [[ "${LOGIN}" == "**None**" ]] || [[ "${PASS}" == "**None**" ]] && [[ ! -f /config/openvpn-credentials.txt ]]; then
+    log "INFO: OVPN: OpenVPN credentials not set. "
+  elif [[ -f /config/openvpn-credentials.txt ]]; then
+    log "INFO: OVPN: Found existing OPENVPN credentials at /config/openvpn-credentials.txt"
+    if [[ 1 -eq $DEBUG ]]; then cat /config/openvpn-credentials.txt; fi
+  else
+    log "INFO: OVPN: Setting OpenVPN credentials..."
+    echo "${LOGIN}" >/config/openvpn-credentials.txt
+    echo "${PASS}" >>/config/openvpn-credentials.txt
+    chmod 600 /config/openvpn-credentials.txt
+    sed -i "s#auth-user-pass.*#auth-user-pass /config/openvpn-credentials.txt#g" ${destConf}
+    if [[ 1 -eq $DEBUG ]]; then cat /config/openvpn-credentials.txt; fi
+  fi
+  if [[ 1 -eq $DEBUG ]]; then cat ${destConf}; fi
+}
+
+#Main
+setTimeZone
+mkTun
+configure_ovpn
+cd /etc/service/openvpn/
+
+openvpn ${destConf}
+
+log "INFO: OVPN: VPN connection lost, stopping unbound"
+log "INFO: OVPN: Waiting ${waitSec} seconds before restarting"
+sleep ${waitSec}

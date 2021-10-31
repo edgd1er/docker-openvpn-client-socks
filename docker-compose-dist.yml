@@ -1,0 +1,22 @@
+version: "3.5"
+services:
+  home:
+    image: edgd1er/openvpn-client-socks-http-pac
+    hostname: homevpn
+    restart: unless-stopped
+    ports:
+      - '1081:80' # expose pac file
+      - '1080:1080' #Exposes socks proxy
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    volumes:
+      - ./:/config/openvpn/
+    environment: # This needs to change - your local network
+      - TZ=Europe/Paris
+      - PAC_DOMAINS="domain1.lan domain2.lan"
+      - PAC_HOST=<host running container>:<exposed sockd proxy port>
+      - DEBUG=0
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0

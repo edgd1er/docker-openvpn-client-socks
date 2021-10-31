@@ -1,0 +1,34 @@
+#!/bin/bash
+set -e -u -o pipefail
+
+DEBUG=${DEBUG:-0}
+
+[[ ${DEBUG:-0} -eq 1 ]] && set -x
+
+. /etc/service/date.sh --source-only
+
+mkdir -p /run/nginx/
+
+#Generate conf file
+SOURCE_CONF=/config/nginx/conf.d/pac.conf
+CONF=/etc/nginx/conf.d/proxy.conf
+export V4_IP=$(ip addr show eth0 | grep -oE 'inet [^/]+' | awk '{print $2}' | head -1 )
+/usr/local/bin/envsubst <${SOURCE_CONF} >${CONF}
+
+#generate pac file
+SOURCE_PAC=/etc/service/nginx/proxy.pac
+PAC=/var/lib/nginx/html/proxy.pac
+adom=(${PAC_DOMAINS:1:-1})
+export PAC_DOMAIN=${adom[0]}
+/usr/local/bin/envsubst <${SOURCE_PAC} >${PAC}
+
+str="";for d in ${adom}; do str+='"'${d}'",\n';done; doms=${str::-3}
+
+sed -i "/array(/a ${doms}" /var/lib/nginx/html/proxy.pac
+ln -sf ${PAC} /var/lib/nginx/html/wpad.dat
+ln -sf ${PAC} /var/lib/nginx/html/wpad.da
+
+log "########################################################"
+log "INFO: nginx: internal ips: ${V4_IP}"
+nginx -s stop >/dev/null 2>&1 || true
+nginx -g "daemon off;"
